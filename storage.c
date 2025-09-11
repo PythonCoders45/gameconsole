@@ -7,22 +7,28 @@
 #include <time.h>
 
 #define MAX_PATH 512
-#define DEFAULT_STORAGE (100*1024*1024) // 100 MB
+#define INTERNAL_STORAGE (100*1024*1024) // 100 MB
 #define STORAGE_FILE "storage_meta.dat"
+
+typedef enum { INTERNAL, MICROSD } StorageType;
 
 typedef struct GameInfo {
     char name[MAX_PATH];
     char folder[MAX_PATH];
-    size_t size;       // bytes
+    size_t size;             // bytes
     bool installed;
     time_t install_time;
+    StorageType storage;      // where the game is stored
     struct GameInfo* next;
 } GameInfo;
 
 typedef struct {
     GameInfo* head;
-    size_t total_storage;
-    size_t used_storage;
+    size_t internal_total;
+    size_t internal_used;
+    size_t sd_total;
+    size_t sd_used;
+    bool sd_inserted;
 } StorageManager;
 
 // ---------------- Utility: Folder Size ----------------
@@ -48,16 +54,46 @@ size_t folder_size(const char* path){
 // ---------------- Initialize Storage ----------------
 void init_storage(StorageManager* sm){
     sm->head = NULL;
-    sm->total_storage = DEFAULT_STORAGE;
-    sm->used_storage = 0;
+    sm->internal_total = INTERNAL_STORAGE;
+    sm->internal_used = 0;
+    sm->sd_total = 0;
+    sm->sd_used = 0;
+    sm->sd_inserted = false;
+}
+
+// ---------------- Insert microSD ----------------
+void insert_sd(StorageManager* sm, size_t size_bytes){
+    sm->sd_inserted = true;
+    sm->sd_total = size_bytes;
+    sm->sd_used = 0;
+    printf("[*] microSD inserted: %zu bytes\n", size_bytes);
+}
+
+// ---------------- Remove microSD ----------------
+void remove_sd(StorageManager* sm){
+    sm->sd_inserted = false;
+    sm->sd_total = 0;
+    sm->sd_used = 0;
+    printf("[*] microSD removed\n");
 }
 
 // ---------------- Add Game ----------------
-bool add_game(StorageManager* sm, const char* folder){
+bool add_game(StorageManager* sm, const char* folder, StorageType storage_type){
     size_t size = folder_size(folder);
-    if(sm->used_storage + size > sm->total_storage){
-        printf("[!] Not enough storage to add %s (%zu bytes)\n", folder, size);
-        return false;
+    if(storage_type == INTERNAL){
+        if(sm->internal_used + size > sm->internal_total){
+            printf("[!] Not enough internal storage to add %s (%zu bytes)\n", folder, size);
+            return false;
+        }
+    } else if(storage_type == MICROSD){
+        if(!sm->sd_inserted){
+            printf("[!] No microSD inserted!\n");
+            return false;
+        }
+        if(sm->sd_used + size > sm->sd_total){
+            printf("[!] Not enough microSD storage to add %s (%zu bytes)\n", folder, size);
+            return false;
+        }
     }
 
     GameInfo* g = (GameInfo*)malloc(sizeof(GameInfo));
@@ -71,11 +107,14 @@ bool add_game(StorageManager* sm, const char* folder){
     g->size = size;
     g->installed = true;
     g->install_time = time(NULL);
+    g->storage = storage_type;
     g->next = sm->head;
     sm->head = g;
 
-    sm->used_storage += size;
-    printf("[*] Game added: %s (%zu bytes)\n", g->name, size);
+    if(storage_type == INTERNAL) sm->internal_used += size;
+    else sm->sd_used += size;
+
+    printf("[*] Game added: %s (%zu bytes) on %s\n", g->name, size, storage_type==INTERNAL?"Internal":"microSD");
     return true;
 }
 
@@ -86,7 +125,10 @@ bool remove_game(StorageManager* sm, const char* name){
         if(strcmp(cur->name,name)==0){
             if(prev) prev->next = cur->next;
             else sm->head = cur->next;
-            sm->used_storage -= cur->size;
+
+            if(cur->storage == INTERNAL) sm->internal_used -= cur->size;
+            else sm->sd_used -= cur->size;
+
             free(cur);
             printf("[*] Game removed: %s\n", name);
             return true;
@@ -104,13 +146,16 @@ void list_games(StorageManager* sm){
     while(cur){
         char buf[64];
         strftime(buf,64,"%Y-%m-%d %H:%M:%S",localtime(&cur->install_time));
-        printf(" - %s (%zu bytes) Installed: %s\n", cur->name, cur->size, buf);
+        printf(" - %s (%zu bytes) Installed: %s on %s\n", cur->name, cur->size, buf,
+               cur->storage==INTERNAL?"Internal":"microSD");
         cur = cur->next;
     }
-    printf("Used storage: %zu / %zu bytes\n", sm->used_storage, sm->total_storage);
+    printf("Internal: %zu/%zu bytes, microSD: %zu/%zu bytes\n",
+           sm->internal_used, sm->internal_total,
+           sm->sd_used, sm->sd_total);
 }
 
-// ---------------- Search Game ----------------
+// ---------------- Check if Game Exists ----------------
 GameInfo* search_game(StorageManager* sm, const char* name){
     GameInfo* cur = sm->head;
     while(cur){
@@ -118,56 +163,6 @@ GameInfo* search_game(StorageManager* sm, const char* name){
         cur = cur->next;
     }
     return NULL;
-}
-
-// ---------------- Sort Games by Name ----------------
-void sort_games_by_name(StorageManager* sm){
-    if(!sm->head || !sm->head->next) return;
-    bool swapped;
-    do{
-        swapped = false;
-        GameInfo* cur = sm->head;
-        GameInfo* prev = NULL;
-        while(cur && cur->next){
-            if(strcmp(cur->name, cur->next->name) > 0){
-                GameInfo* tmp = cur->next;
-                cur->next = tmp->next;
-                tmp->next = cur;
-                if(prev) prev->next = tmp;
-                else sm->head = tmp;
-                prev = tmp;
-                swapped = true;
-            } else {
-                prev = cur;
-                cur = cur->next;
-            }
-        }
-    } while(swapped);
-}
-
-// ---------------- Sort Games by Size ----------------
-void sort_games_by_size(StorageManager* sm){
-    if(!sm->head || !sm->head->next) return;
-    bool swapped;
-    do{
-        swapped = false;
-        GameInfo* cur = sm->head;
-        GameInfo* prev = NULL;
-        while(cur && cur->next){
-            if(cur->size < cur->next->size){
-                GameInfo* tmp = cur->next;
-                cur->next = tmp->next;
-                tmp->next = cur;
-                if(prev) prev->next = tmp;
-                else sm->head = tmp;
-                prev = tmp;
-                swapped = true;
-            } else {
-                prev = cur;
-                cur = cur->next;
-            }
-        }
-    } while(swapped);
 }
 
 // ---------------- Free All Games ----------------
@@ -179,122 +174,27 @@ void free_storage(StorageManager* sm){
         free(tmp);
     }
     sm->head = NULL;
-    sm->used_storage = 0;
-}
-
-// ---------------- Save Storage Metadata ----------------
-void save_storage(StorageManager* sm){
-    FILE* f = fopen(STORAGE_FILE,"wb");
-    if(!f){
-        printf("[!] Failed to save storage metadata.\n");
-        return;
-    }
-    fwrite(&sm->total_storage,sizeof(size_t),1,f);
-    fwrite(&sm->used_storage,sizeof(size_t),1,f);
-
-    GameInfo* cur = sm->head;
-    while(cur){
-        fwrite(cur,sizeof(GameInfo),1,f);
-        cur = cur->next;
-    }
-    fclose(f);
-    printf("[*] Storage metadata saved.\n");
-}
-
-// ---------------- Load Storage Metadata ----------------
-void load_storage(StorageManager* sm){
-    FILE* f = fopen(STORAGE_FILE,"rb");
-    if(!f){
-        printf("[!] No existing storage metadata. Starting fresh.\n");
-        init_storage(sm);
-        return;
-    }
-    init_storage(sm);
-    fread(&sm->total_storage,sizeof(size_t),1,f);
-    fread(&sm->used_storage,sizeof(size_t),1,f);
-
-    GameInfo tmp;
-    GameInfo* last = NULL;
-    while(fread(&tmp,sizeof(GameInfo),1,f) == 1){
-        GameInfo* g = (GameInfo*)malloc(sizeof(GameInfo));
-        memcpy(g,&tmp,sizeof(GameInfo));
-        g->next = NULL;
-        if(last) last->next = g;
-        else sm->head = g;
-        last = g;
-    }
-    fclose(f);
-    printf("[*] Storage metadata loaded.\n");
-}
-
-// ---------------- Backup Storage ----------------
-void backup_storage(StorageManager* sm, const char* backup_file){
-    FILE* f = fopen(backup_file,"wb");
-    if(!f){
-        printf("[!] Failed to backup storage.\n");
-        return;
-    }
-    GameInfo* cur = sm->head;
-    while(cur){
-        fwrite(cur,sizeof(GameInfo),1,f);
-        cur = cur->next;
-    }
-    fclose(f);
-    printf("[*] Storage backup saved to %s.\n", backup_file);
-}
-
-// ---------------- Restore Storage ----------------
-void restore_storage(StorageManager* sm, const char* backup_file){
-    FILE* f = fopen(backup_file,"rb");
-    if(!f){
-        printf("[!] Failed to restore storage.\n");
-        return;
-    }
-    free_storage(sm);
-    GameInfo tmp, *last=NULL;
-    while(fread(&tmp,sizeof(GameInfo),1,f)==1){
-        GameInfo* g = (GameInfo*)malloc(sizeof(GameInfo));
-        memcpy(g,&tmp,sizeof(GameInfo));
-        g->next=NULL;
-        if(last) last->next=g;
-        else sm->head=g;
-        last=g;
-        sm->used_storage += g->size;
-    }
-    fclose(f);
-    printf("[*] Storage restored from %s.\n", backup_file);
+    sm->internal_used = 0;
+    sm->sd_used = 0;
 }
 
 // ---------------- Example Usage ----------------
 #ifdef STORAGE_TEST
 int main(){
     StorageManager sm;
-    load_storage(&sm);
+    init_storage(&sm);
 
-    add_game(&sm,"./games/super_game");
-    add_game(&sm,"./games/cool_game");
+    insert_sd(&sm, 200*1024*1024); // 200 MB microSD
 
+    add_game(&sm,"./games/super_game", INTERNAL);
+    add_game(&sm,"./games/cool_game", MICROSD);
     list_games(&sm);
-
-    sort_games_by_name(&sm);
-    printf("\nSorted by name:\n");
-    list_games(&sm);
-
-    sort_games_by_size(&sm);
-    printf("\nSorted by size:\n");
-    list_games(&sm);
-
-    save_storage(&sm);
 
     remove_game(&sm,"super_game");
     printf("\nAfter removal:\n");
     list_games(&sm);
 
-    backup_storage(&sm,"backup.dat");
-    free_storage(&sm);
-
-    restore_storage(&sm,"backup.dat");
-    printf("\nAfter restore:\n");
+    remove_sd(&sm);
     list_games(&sm);
 
     free_storage(&sm);
