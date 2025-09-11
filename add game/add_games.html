@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Add Game (Unity/Unreal)</title>
+<style>
+body { font-family:sans-serif; background:#fff; color:#000; display:flex; justify-content:center; align-items:center; height:100vh; margin:0; }
+.container { background:#f2f2f2; padding:30px; border-radius:12px; box-shadow:0 5px 15px rgba(0,0,0,0.2); width:400px; text-align:center; }
+input, textarea { width:100%; padding:10px; margin:5px 0; border-radius:6px; border:1px solid #ccc; }
+button { background:#000; color:#fff; padding:10px 20px; border:none; border-radius:8px; cursor:pointer; margin-top:10px; }
+button:hover { background:#333; }
+#msg { margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="container" id="gameContainer">
+<h2>Add Game (Unity/Unreal)</h2>
+<form id="gameForm" enctype="multipart/form-data">
+<input type="text" name="name" placeholder="Game Name" required>
+<input type="text" name="size" placeholder="Size (optional)">
+<input type="text" name="genre" placeholder="Genre">
+<textarea name="description" placeholder="Description"></textarea>
+<input type="file" name="gameFile" accept=".zip,.unitypackage,.uproject,.exe" required>
+<button type="submit">Upload Game</button>
+</form>
+<p id="msg"></p>
+</div>
+
+<script>
+const userId = localStorage.getItem('user_id');
+const container = document.getElementById('gameContainer');
+
+if(!userId){
+    // User not signed in, show 404 style message
+    container.innerHTML = '<h1>404 - Not Found</h1><p>You must be signed in to view this page.</p>';
+} else {
+    // Handle form submission
+    const form = document.getElementById('gameForm');
+    form.addEventListener('submit', async e => {
+        e.preventDefault();
+        const msg = document.getElementById('msg');
+        const formData = new FormData(form);
+
+        try {
+            const res = await fetch('http://localhost:3000/api/add_game', {
+                method:'POST',
+                headers: { 'x-user-id': userId },
+                body: formData
+            });
+            const data = await res.json();
+            msg.textContent = data.success ? `✅ Game "${data.game.name}" uploaded!` : `❌ ${data.error}`;
+        } catch(err) {
+            msg.textContent = '❌ Server error';
+        }
+    });
+}
+</script>
+</body>
+</html>
