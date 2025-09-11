@@ -54,4 +54,16 @@ app.post('/api/add_game', upload.single('gameFile'), (req, res) => {
     res.json({ success: true, game: newGame });
 });
 
+// Middleware to protect routes
+function authRequired(req, res, next) {
+    const userId = req.headers['x-user-id']; // expect client to send user_id in header
+    if (!userId) {
+        return res.status(404).send('Not Found'); // user not signed in
+    }
+    next();
+}
+
+// Protect the add game page
+app.use('/add_game.html', authRequired);
+
 app.listen(PORT, () => console.log(`Game server running at http://localhost:${PORT}`));
